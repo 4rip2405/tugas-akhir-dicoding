@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import numpy as np
 
 # --- Load Data ---
 # Load data yang telah dibersihkan
@@ -15,6 +16,35 @@ Dashboard ini dirancang untuk menjawab dua pertanyaan utama:
 2. Apakah kondisi cuaca memengaruhi jumlah peminjaman sepeda?
 """)
 
+# --- Sidebar: Filter Interaktif ---
+st.sidebar.header("Filter Data")
+date_range = st.sidebar.date_input(
+    "Pilih Rentang Tanggal",
+    value=(pd.to_datetime("2011-01-01"), pd.to_datetime("2012-12-31"))
+)
+
+season_options = {
+    1: "Musim Semi",
+    2: "Musim Panas",
+    3: "Musim Gugur",
+    4: "Musim Dingin"
+}
+selected_season = st.sidebar.multiselect(
+    "Pilih Musim",
+    options=list(season_options.keys()),
+    format_func=lambda x: season_options[x]
+)
+
+# --- Filter Data Berdasarkan Input ---
+filtered_data = alldata_df[
+    (pd.to_datetime(alldata_df['dteday']) >= pd.to_datetime(date_range[0])) &
+    (pd.to_datetime(alldata_df['dteday']) <= pd.to_datetime(date_range[1]))
+]
+if selected_season:
+    filtered_data = filtered_data[filtered_data['season'].isin(selected_season)]
+
+
+
 # Sidebar untuk Navigasi
 option = st.sidebar.selectbox(
     "Pilih Pertanyaan untuk Dianalisis:",
@@ -26,10 +56,10 @@ if option == "Perbedaan Jumlah Peminjaman (Hari Kerja dan Akhir Pekan)":
     st.header("Perbedaan Jumlah Peminjaman (Hari Kerja dan Akhir Pekan)")
 
     # Data agregasi untuk hari libur
-    holiday_df = alldata_df.groupby(by="holiday").cnt.mean().sort_values(ascending=False)
+    holiday_df = filtered_data.groupby(by="holiday").cnt.mean().sort_values(ascending=False)
     holiday_df = holiday_df.rename(index={
-        0: "Tidak Meminjam",
-        1: "Meminjam"
+        0: "Tidak Hari Libur",
+        1: "Hari Libur"
     }).to_frame(name="total_peminjaman")
 
     # Visualisasi data hari libur
@@ -49,10 +79,10 @@ if option == "Perbedaan Jumlah Peminjaman (Hari Kerja dan Akhir Pekan)":
     st.pyplot(fig)
 
     # Data agregasi untuk hari kerja
-    workingday_df = alldata_df.groupby(by="workingday").cnt.mean().sort_values(ascending=True)
+    workingday_df = filtered_data.groupby(by="workingday").cnt.mean().sort_values(ascending=True)
     workingday_df = workingday_df.rename(index={
-        0: "Tidak Meminjam",
-        1: "Meminjam"
+        0: "Tidak Hari Libur",
+        1: "Hari Libur"
     }).to_frame(name="total_peminjaman")
 
     # Visualisasi data hari kerja
@@ -79,11 +109,11 @@ if option == "Perbedaan Jumlah Peminjaman (Hari Kerja dan Akhir Pekan)":
     """)
 
 # --- Analisis 2: Pengaruh Kondisi Cuaca ---
-if option == "Pengaruh Kondisi Cuaca":
+elif option == "Pengaruh Kondisi Cuaca":
     st.header("Pengaruh Kondisi Cuaca terhadap Jumlah Peminjaman")
 
     # Data agregasi untuk kondisi cuaca
-    weathersit_stats = alldata_df.groupby('weathersit')['cnt'].mean().reset_index()
+    weathersit_stats = filtered_data.groupby('weathersit')['cnt'].mean().reset_index()
     weathersit_stats['weathersit'] = weathersit_stats['weathersit'].map({
         1: 'Cerah',
         2: 'Berawan',
@@ -108,60 +138,61 @@ if option == "Pengaruh Kondisi Cuaca":
     """)
 
 # --- Analisis 3: Analisis Lanjutan menggunakan Metode Cluster ---
-if option == "Analisis Lanjutan menggunakan Metode Cluster":
+elif option == "Analisis Lanjutan menggunakan Metode Cluster":
     st.header("Analisis Lanjutan menggunakan Metode Cluster")
-
-    # Import library yang dibutuhkan
-    from sklearn.cluster import KMeans
-    from sklearn.preprocessing import StandardScaler
 
     # --- Data Preparation for Clustering ---
     # Fitur yang relevan untuk clustering
-    features = alldata_df[['cnt', 'temp', 'hum', 'windspeed', 'workingday', 'weathersit']]
+    features = filtered_data[['cnt', 'temp', 'hum', 'windspeed', 'workingday', 'weathersit']]
 
-    # Normalisasi data
-    scaler = StandardScaler()
-    features_scaled = scaler.fit_transform(features)
+    # Normalisasi data (Manual Scaling)
+    features_normalized = (features - features.min()) / (features.max() - features.min())
 
-    # --- Apply K-Means Clustering ---
-    # Tentukan jumlah cluster (misalnya, 3 atau 4)
-    kmeans = KMeans(n_clusters=3, random_state=42)
-    alldata_df['Cluster'] = kmeans.fit_predict(features_scaled)
+    # --- Rule-Based Clustering ---
+    # Membuat aturan clustering sederhana
+    # Contoh aturan: Cluster berdasarkan jumlah peminjaman (cnt) dan suhu (temp)
+    conditions = [
+        (features_normalized['cnt'] <= 0.33) & (features_normalized['temp'] <= 0.33),
+        (features_normalized['cnt'] > 0.33) & (features_normalized['cnt'] <= 0.66),
+        (features_normalized['cnt'] > 0.66) & (features_normalized['temp'] > 0.66)
+    ]
+
+    # Berikan label cluster berdasarkan aturan
+    cluster_labels = np.select(conditions, [0, 1, 2], default=3)  # Default ke cluster 3 jika tidak memenuhi aturan
+    filtered_data['Cluster'] = cluster_labels
 
     # --- Visualisasi Cluster ---
-    # Scatter plot untuk visualisasi clustering (gunakan 2D representasi)
-    st.subheader("Visualisasi Cluster")
-    fig, ax = plt.subplots(figsize=(10, 6))
+    plt.figure(figsize=(10, 6))
     sns.scatterplot(
-        x=features_scaled[:, 0],  # Fitur pertama (misal: cnt)
-        y=features_scaled[:, 1],  # Fitur kedua (misal: temp)
-        hue=alldata_df['Cluster'],
+        x=features_normalized['cnt'],  # Fitur pertama (misal: cnt)
+        y=features_normalized['temp'],  # Fitur kedua (misal: temp)
+        hue=filtered_data['Cluster'],
         palette='Set1',
-        legend='full',
-        ax=ax
+        legend='full'
     )
-    ax.set_title('Clustering Analytics pada Data Bike Sharing')
-    ax.set_xlabel('Jumlah Peminjaman (Normalized)')
-    ax.set_ylabel('Suhu (Normalized)')
-    st.pyplot(fig)
-
-    # Kesimpulan
+    plt.title('Clustering Analytics pada Data Bike Sharing')
+    plt.xlabel('Jumlah Peminjaman (Normalized)')
+    plt.ylabel('Suhu (Normalized)')
+    st.pyplot()
+    
+# Kesimpulan
     st.markdown("""
     **Kesimpulan:**
     
-    Pada metode Cluster ini dapat diketahui bahwa :
+Pada metode Cluster ini dapat diketahui bahwa :
 
-    Analisis rata-rata setiap fitur pada kelompok (cluster) untuk memahami karakteristiknya.
-    Contoh: Apakah Cluster 1 didominasi oleh cuaca cerah dan hari kerja, sementara Cluster 2 terkait dengan cuaca buruk dan akhir pekan?
-
-    Mengidentifikasi strategi untuk meningkatkan peminjaman sepeda pada kondisi cuaca tertentu atau jenis hari tertentu.
-    Menemukan potensi untuk penjadwalan atau promosi pada waktu tertentu.
-    """) 
+- Analisis rata-rata setiap fitur pada kelompok (cluster) untuk memahami karakteristiknya.
+Contoh: Apakah Cluster 1 didominasi oleh cuaca cerah dan hari kerja, sementara Cluster 2 terkait dengan cuaca buruk dan akhir pekan?
+- Mengidentifikasi strategi untuk meningkatkan peminjaman sepeda pada kondisi cuaca tertentu atau jenis hari tertentu.
+- Menemukan potensi untuk penjadwalan atau promosi pada waktu tertentu.
+    """)
+    
+# Kesimpulan
     st.markdown("""
-    **Alasan Menggunakan Metode Clustering :**
-    - Memberikan wawasan baru dengan segmentasi berbasis pola.
-    - Membantu menjawab kedua pertanyaan dengan mengelompokkan data yang memiliki pola peminjaman serupa.
-    - Meningkatkan analisis prediktif di masa depan.
-    
-    """) 
-    
+    **Alasan Menggunakan Metode Cluster:**
+
+- Pendekatan ini transparan dan tidak memerlukan pustaka tambahan.
+- Aturan clustering eksplisit dan mudah dipahami oleh siapa saja, termasuk mereka yang bukan ahli data.
+- Ketika pola dalam data sudah jelas (misalnya, rentang tertentu untuk setiap fitur), metode ini sangat cocok.
+    """)
+
